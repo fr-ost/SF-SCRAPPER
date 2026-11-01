@@ -36,6 +36,13 @@ While a scan is running, the toolbar icon gets a green ▶ and a badge showing h
 
 The icon in `icons/` is an original design. To use TwitterScore's own logo, replace `icons/icon16.png`, `icon32.png`, `icon48.png` and `icon128.png` (plus the `-run` versions) with PNGs of the same size and name, then click reload in `chrome://extensions`.
 
+## Skipping accounts already scanned
+
+**Skip accounts already scanned before** is on by default, in the popup and on the Scan tab. An account that already has a *completed* scan in **Scan history** is skipped and costs 0 requests. The message after you click Start lists which accounts were skipped.
+- Untick the box to rescan anyway. The setting is remembered.
+- **Settings → "rescan if the last scan is older than N days"** allows an automatic rescan once the data gets old. 0 means never.
+- Scans that failed or were stopped part-way don't count as scanned, so those accounts are always retried.
+
 ## Filters
 
 - **💾 Save as default** (next to Min score in the popup and on the Scan tab) remembers your min score, plus the category and tag filters on the Scan tab, for every new scan.

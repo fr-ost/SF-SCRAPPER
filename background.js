@@ -15,7 +15,7 @@ import {
   mergeSettings, parseUsernames, buildFollowersRequest, buildRequest, redactUrl,
   extractItems, extractMeta, extractApiError, normalizeFollower, scoreOf,
 } from './lib/api.js';
-import { upsertFollowers, addScan, putScan, purgeBelow } from './lib/db.js';
+import { upsertFollowers, addScan, putScan, purgeBelow, getAllScans } from './lib/db.js';
 
 const STOP = new Error('__STOP__');
 const CLAMP_SIZES = new Set([10, 15, 20, 25, 30, 40, 50, 100]);
@@ -407,13 +407,31 @@ async function handlePage(job, page, json) {
 }
 
 // ---------------------------------------------------------------- commands
-async function enqueue(usernames, minScore, filters) {
+/** Map of lower-case source -> ISO time of its latest completed scan. */
+async function completedScans() {
+  const m = new Map();
+  for (const s of await getAllScans()) {
+    if (s.status !== 'done' || !s.source) continue;
+    const k = s.source.toLowerCase();
+    const t = s.finished_at || s.started_at || s.created_at || '';
+    if (!m.has(k) || t > m.get(k)) m.set(k, t);
+  }
+  return m;
+}
+
+async function enqueue(usernames, minScore, filters, skipScanned = S.skipScanned) {
   const list = Array.isArray(usernames) ? parseUsernames(usernames.join('\n')) : parseUsernames(usernames);
   const ms = Math.max(0, Number(minScore) || 0);
   const added = [];
+  const alreadyScanned = [];
+  let busyCount = 0;
+  const done = skipScanned ? await completedScans() : new Map();
+  const maxAge = (Number(S.rescanAfterDays) || 0) * 86400000;
   for (const source of list) {
     const busy = st.jobs.find((j) => j.source.toLowerCase() === source.toLowerCase() && ['queued', 'running', 'paused'].includes(j.status));
-    if (busy) continue;
+    if (busy) { busyCount++; continue; }
+    const last = done.get(source.toLowerCase());
+    if (last && (!maxAge || Date.now() - Date.parse(last) < maxAge)) { alreadyScanned.push(source); continue; }
     const job = {
       id: ++jobSeq, source, minScore: ms, filters: filters || {}, status: 'queued',
       createdAt: nowIso(), startedAt: null, finishedAt: null,
@@ -427,10 +445,11 @@ async function enqueue(usernames, minScore, filters) {
     added.push(source);
   }
   if (added.length) log('info', `Queued ${added.length} account(s): ${added.slice(0, 10).map((s) => '@' + s).join(', ')}${added.length > 10 ? '…' : ''}`);
+  if (alreadyScanned.length) log('info', `⏭ Skipped ${alreadyScanned.length} already-scanned account(s): ${alreadyScanned.slice(0, 10).map((s) => '@' + s).join(', ')}${alreadyScanned.length > 10 ? '…' : ''}`);
   for (const j of st.jobs) if (j.status === 'paused') j.status = 'running';
   if (!engineActive && st.jobs.some((j) => ['queued', 'running'].includes(j.status))) runEngine();
   schedulePersist();
-  return { added: added.length, skipped: list.length - added.length };
+  return { added: added.length, busy: busyCount, alreadyScanned, skipped: list.length - added.length };
 }
 
 function resume() {
@@ -477,18 +496,19 @@ const handlers = {
   getSettings: async () => S,
   saveSettings: async ({ settings }) => {
     S = mergeSettings({ ...S, ...settings });
-    for (const k of ['pageSize', 'firstPage', 'rpm', 'monthlyLimit', 'maxConcurrent', 'parallelAccounts', 'pageWindow', 'maxPagesPerAccount', 'requestTimeoutMs', 'defaultMinScore']) {
-      S[k] = Math.max(k === 'firstPage' || k === 'maxPagesPerAccount' || k === 'defaultMinScore' ? 0 : 1, Number(S[k]) || 0);
+    for (const k of ['pageSize', 'firstPage', 'rpm', 'monthlyLimit', 'maxConcurrent', 'parallelAccounts', 'pageWindow', 'maxPagesPerAccount', 'requestTimeoutMs', 'defaultMinScore', 'rescanAfterDays']) {
+      S[k] = Math.max(['firstPage', 'maxPagesPerAccount', 'defaultMinScore', 'rescanAfterDays'].includes(k) ? 0 : 1, Number(S[k]) || 0);
     }
     S.earlyStop = !!S.earlyStop;
+    S.skipScanned = !!S.skipScanned;
     const df = S.defaultFilters || {};
     S.defaultFilters = { category_id: String(df.category_id ?? ''), tag_id: String(df.tag_id ?? ''), tag_category_id: String(df.tag_category_id ?? '') };
     await chrome.storage.local.set({ settings: S });
     return S;
   },
-  start: async ({ usernames, minScore, filters }) => {
+  start: async ({ usernames, minScore, filters, skipScanned }) => {
     if (!S.apiKey) throw new Error('Set your TwitterScore API key in Settings first');
-    return enqueue(usernames, minScore, filters);
+    return enqueue(usernames, minScore, filters, skipScanned === undefined ? S.skipScanned : !!skipScanned);
   },
   stop: async () => { stopAll('stopped by user'); return true; },
   resume: async () => resume(),
