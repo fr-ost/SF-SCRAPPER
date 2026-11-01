@@ -1,7 +1,7 @@
 import { send, $, fmt, esc, ago, fmtDate, usageHtml, statusLine, jobRow, JOB_HEAD, bindRunToggle } from './common.js';
 import { writeXlsx, readXlsx } from '../lib/xlsx.js';
 import { DEFAULT_SETTINGS, parseUsernames, extractItems } from '../lib/api.js';
-import { getAllFollowers, getAllScans, deleteFollowersBySource, clearAll, upsertFollowers, putScansRaw, countBelow, removeDuplicates } from '../lib/db.js';
+import { getAllFollowers, getAllScans, clearAll, upsertFollowers, putScansRaw, countBelow, removeDuplicates } from '../lib/db.js';
 
 // ------------------------------------------------------------------ tabs
 const tabs = ['scan', 'db', 'history', 'settings', 'log'];
@@ -74,22 +74,22 @@ $('#saveDefaults').onclick = async () => {
   } catch (e) { $('#msg').textContent = '⚠ ' + e.message; }
 };
 
-async function purge(min, source, includeNoScore, msgEl) {
+async function purge(min, includeNoScore, msgEl) {
   if (!(min > 0)) { msgEl.textContent = '⚠ Enter a score above 0'; return; }
-  const n = await countBelow(min, source, includeNoScore);
-  if (!n) { msgEl.textContent = `Nothing to remove: no saved accounts below ${min}${source ? ' from @' + source : ''}.`; return; }
-  if (!confirm(`Remove ${n.toLocaleString()} saved account row(s) with score below ${min}${source ? ' from @' + source : ' (all sources)'}?\nThis cannot be undone. Export first if you need them.`)) return;
-  const removed = await send('purgeBelow', { minScore: min, source, includeNoScore });
+  const n = await countBelow(min, includeNoScore);
+  if (!n) { msgEl.textContent = `Nothing to remove: no saved accounts below ${min}.`; return; }
+  if (!confirm(`Remove ${n.toLocaleString()} saved account(s) with score below ${min}?\nThis cannot be undone. Export first if you need them.`)) return;
+  const removed = await send('purgeBelow', { minScore: min, includeNoScore });
   msgEl.textContent = `🧹 Removed ${removed.toLocaleString()} row(s) below ${min}`;
   if (all.length) loadDb();
 }
-$('#purgeHere').onclick = () => purge(Number($('#minScore').value) || 0, '', true, $('#msg'));
+$('#purgeHere').onclick = () => purge(Number($('#minScore').value) || 0, true, $('#msg'));
 $('#purgePreview').onclick = async () => {
   const min = Number($('#purgeMin').value) || 0;
-  const n = await countBelow(min, $('#purgeSource').value, $('#purgeNoScore').checked);
+  const n = await countBelow(min, $('#purgeNoScore').checked);
   $('#purgeMsg').textContent = `${n.toLocaleString()} row(s) would be removed`;
 };
-$('#purgeRun').onclick = () => purge(Number($('#purgeMin').value) || 0, $('#purgeSource').value, $('#purgeNoScore').checked, $('#purgeMsg'));
+$('#purgeRun').onclick = () => purge(Number($('#purgeMin').value) || 0, $('#purgeNoScore').checked, $('#purgeMsg'));
 
 function optionsHtml(list) {
   return '<option value="">— any —</option>' + list.map((o) => `<option value="${esc(o.id)}">${esc(o.name)}${o.extra ? ' · ' + esc(o.extra) : ''} (#${esc(o.id)})</option>`).join('');
@@ -178,34 +178,24 @@ let sortDir = -1;
 
 const COLS = [
   ['pfp', ''], ['username', 'Username'], ['name', 'Name'], ['score', 'Score', 1], ['followers_count', 'Followers', 1],
-  ['scanned_from', 'Scanned from'], ['source_count', '# Sources', 1], ['scan_time', 'Last scan'], ['first_seen_at', 'First seen'],
+  ['scan_time', 'Last scan'], ['first_seen_at', 'First seen'],
   ['scan_count', 'Scans', 1], ['tags', 'Tags'], ['categories', 'Categories'], ['description', 'Bio'],
 ];
-const srcList = (r) => (Array.isArray(r.sources) && r.sources.length ? r.sources : String(r.scanned_from || '').split(/\s*,\s*/).filter(Boolean));
 
 async function loadDb() {
   $('#dbStats').textContent = 'Loading…';
   all = await getAllFollowers();
-  const sources = [...new Set(all.flatMap(srcList))].sort((a, b) => a.localeCompare(b));
-  const cur = $('#fSource').value;
-  $('#fSource').innerHTML = '<option value="">All sources</option>' + sources.map((s) => `<option ${s === cur ? 'selected' : ''}>${esc(s)}</option>`).join('');
-  const pcur = $('#purgeSource').value;
-  $('#purgeSource').innerHTML = '<option value="">All sources</option>' + sources.map((s) => `<option ${s === pcur ? 'selected' : ''}>${esc(s)}</option>`).join('');
   applyFilters();
 }
 
 function applyFilters() {
   const q = $('#q').value.trim().toLowerCase();
-  const src = $('#fSource').value.toLowerCase();
   const min = $('#fMin').value === '' ? null : Number($('#fMin').value);
   const max = $('#fMax').value === '' ? null : Number($('#fMax').value);
-  const minSrc = Math.max(1, Number($('#fMinSrc').value) || 1);
   let rows = all;
-  if (src) rows = rows.filter((r) => srcList(r).some((s) => s.toLowerCase() === src));
-  if (minSrc > 1) rows = rows.filter((r) => (r.source_count || srcList(r).length) >= minSrc);
   if (min !== null) rows = rows.filter((r) => (r.score ?? -Infinity) >= min);
   if (max !== null) rows = rows.filter((r) => (r.score ?? Infinity) <= max);
-  if (q) rows = rows.filter((r) => `${r.username} ${r.name} ${r.description} ${r.tags} ${r.categories} ${r.scanned_from}`.toLowerCase().includes(q));
+  if (q) rows = rows.filter((r) => `${r.username} ${r.name} ${r.description} ${r.tags} ${r.categories}`.toLowerCase().includes(q));
   const dir = sortDir;
   rows = [...rows].sort((a, b) => {
     const x = a[sortKey], y = b[sortKey];
@@ -215,8 +205,7 @@ function applyFilters() {
     return (typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y))) * dir;
   });
   view = rows;
-  const nSources = new Set(all.flatMap(srcList).map((s) => s.toLowerCase())).size;
-  $('#dbStats').textContent = `${fmt(all.length)} unique smart accounts · ${fmt(nSources)} scanned sources · showing ${fmt(view.length)}`;
+  $('#dbStats').textContent = `${fmt(all.length)} unique smart accounts · showing ${fmt(view.length)}`;
   page = 0;
   renderDb();
 }
@@ -227,7 +216,7 @@ function renderDb() {
     `<th class="${k === 'pfp' ? '' : 'sort'} ${n ? 'num' : ''}" data-k="${k}">${esc(label)}${sortKey === k ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('') + '</tr>';
   document.querySelectorAll('#dbHead th.sort').forEach((th) => (th.onclick = () => {
     const k = th.dataset.k;
-    if (sortKey === k) sortDir = -sortDir; else { sortKey = k; sortDir = ['score', 'followers_count', 'source_count', 'scan_count', 'scan_time', 'first_seen_at'].includes(k) ? -1 : 1; }
+    if (sortKey === k) sortDir = -sortDir; else { sortKey = k; sortDir = ['score', 'followers_count', 'scan_count', 'scan_time', 'first_seen_at'].includes(k) ? -1 : 1; }
     applyFilters();
   }));
   const per = Number($('#perPage').value);
@@ -239,22 +228,20 @@ function renderDb() {
     if (k === 'pfp') return `<td>${r.profile_image ? `<img class="pfp" loading="lazy" referrerpolicy="no-referrer" src="${esc(r.profile_image)}">` : ''}</td>`;
     if (k === 'username') return `<td><a href="https://x.com/${esc(r.username)}" target="_blank">@${esc(r.username)}</a></td>`;
     if (k === 'score') return `<td class="num score">${fmt(v)}</td>`;
-    if (k === 'scanned_from') return `<td class="small">${srcList(r).map((s) => `<a href="https://x.com/${esc(s)}" target="_blank">@${esc(s)}</a>`).join(', ')}</td>`;
     if (k === 'scan_time' || k === 'first_seen_at') return `<td class="small" title="${esc(v)}">${esc(fmtDate(v))}</td>`;
     if (k === 'description') return `<td class="desc">${esc(String(v || '').slice(0, 200))}</td>`;
-    return `<td class="${n ? 'num' : ''} ${k === 'tags' || k === 'categories' || k === 'sources' ? 'small' : ''}">${n ? fmt(v) : esc(v)}</td>`;
+    return `<td class="${n ? 'num' : ''} ${k === 'tags' || k === 'categories' ? 'small' : ''}">${n ? fmt(v) : esc(v)}</td>`;
   }).join('') + '</tr>').join('') || `<tr><td colspan="${cols.length}" class="muted">No records.</td></tr>`;
   $('#pageInfo').textContent = `Page ${page + 1} / ${pages}`;
 }
 
-['#q', '#fMin', '#fMax', '#fMinSrc'].forEach((s) => ($(s).oninput = debounce(applyFilters, 200)));
-$('#fSource').onchange = applyFilters;
+['#q', '#fMin', '#fMax'].forEach((s) => ($(s).oninput = debounce(applyFilters, 200)));
 $('#dedupe').onclick = async () => {
   const btn = $('#dedupe');
   btn.disabled = true;
   try {
     const n = await removeDuplicates();
-    alert(n ? `Removed ${n.toLocaleString()} duplicate row(s). Each smart account now appears once, with all its sources merged.` : 'No duplicates found. Every smart account already appears once.');
+    alert(n ? `Removed ${n.toLocaleString()} duplicate row(s). Each smart account now appears once.` : 'No duplicates found. Every smart account already appears once.');
     loadDb();
   } catch (e) { alert('Failed: ' + e.message); }
   btn.disabled = false;
@@ -281,7 +268,7 @@ function csvCell(v) {
   return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
 function tableData(rows) {
-  const base = ['username', 'name', 'score', 'scanned_from', 'source_count', 'scan_time', 'first_seen_at', 'scan_count', 'twitter_id', 'followers_count', 'subscribed_at', 'tags', 'categories', 'description', 'profile_image', 'url', 'scan_id', 'min_score_filter', 'page'];
+  const base = ['username', 'name', 'score', 'scan_time', 'first_seen_at', 'scan_count', 'twitter_id', 'followers_count', 'subscribed_at', 'tags', 'categories', 'description', 'profile_image', 'url', 'scan_id', 'min_score_filter', 'page'];
   const rawKeys = new Set();
   for (const r of rows) if (r.raw) for (const k of Object.keys(r.raw)) rawKeys.add(k);
   const extra = [...rawKeys].sort();
@@ -313,8 +300,7 @@ function sheetToRecords(rows) {
   const header = rows[0].map((h) => String(h).trim().toLowerCase().replace(/\s+/g, '_'));
   const idx = (n) => header.indexOf(n);
   if (idx('username') < 0) throw new Error('Sheet needs a "username" column');
-  const fallbackSource = idx('scanned_from') < 0 && idx('sources') < 0 ? (prompt('This sheet has no "scanned_from" column. Which account were these followers scanned from?', 'imported') || 'imported') : '';
-  const numCols = new Set(['score', 'followers_count', 'scan_count', 'scan_id', 'min_score_filter', 'page', 'source_count']);
+  const numCols = new Set(['score', 'followers_count', 'scan_count', 'scan_id', 'min_score_filter', 'page']);
   const now = new Date().toISOString();
   const out = [];
   for (const row of rows.slice(1)) {
@@ -330,9 +316,7 @@ function sheetToRecords(rows) {
     const username = String(o.username || '').replace(/^@/, '').trim();
     if (!username) continue;
     o.username = username;
-    const sources = String(o.scanned_from || o.sources || fallbackSource).split(/\s*,\s*/).map((x) => x.replace(/^@/, '')).filter(Boolean);
-    const r = { ...o, sources, scanned_from: sources.join(', '), scan_time: o.scan_time || now };
-    delete r.source_count;
+    const r = { ...o, scan_time: o.scan_time || now };
     r.id = username.toLowerCase();
     r.url = r.url || `https://x.com/${username}`;
     out.push(r);
@@ -341,7 +325,7 @@ function sheetToRecords(rows) {
 }
 $('#expCsv').onclick = () => download(`smart-followers-${stamp()}.csv`, toCsv(view), 'text/csv;charset=utf-8');
 $('#expJson').onclick = async () => {
-  const payload = { type: 'sf-backup', version: 2, exported_at: new Date().toISOString(), followers: view, scans: await getAllScans() };
+  const payload = { type: 'sf-backup', version: 3, exported_at: new Date().toISOString(), followers: view, scans: await getAllScans() };
   download(`smart-followers-${stamp()}.json`, JSON.stringify(payload, null, 1), 'application/json');
 };
 $('#impJson').onclick = () => $('#impFile').click();
@@ -363,15 +347,6 @@ $('#impFile').onchange = async () => {
     loadDb();
   } catch (e) { alert('Import failed: ' + e.message); }
   $('#impFile').value = '';
-};
-$('#delSource').onclick = async () => {
-  const s = $('#fSource').value;
-  if (!s) return alert('Select a source in the "Scanned from" filter first.');
-  if (!confirm(`Remove source @${s}? Accounts found only from @${s} are deleted; accounts also found from other sources are kept.`)) return;
-  const n = await deleteFollowersBySource(s);
-  alert(`Updated ${n} account(s)`);
-  $('#fSource').value = '';
-  loadDb();
 };
 $('#clearDb').onclick = async () => {
   if (!confirm('Delete the ENTIRE smart-follower database and scan history? Export first if you need it.')) return;

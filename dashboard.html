@@ -95,10 +95,8 @@
     <div class="panel">
       <div class="row">
         <div class="grow"><label>Search (username, name, bio, tags)</label><input id="q" style="width:100%" placeholder="search…"></div>
-        <div><label>Scanned from</label><select id="fSource"><option value="">All sources</option></select></div>
         <div><label>Min score</label><input id="fMin" type="number" style="width:90px"></div>
         <div><label>Max score</label><input id="fMax" type="number" style="width:90px"></div>
-        <div><label>Min # sources</label><input id="fMinSrc" type="number" min="1" value="1" style="width:80px" title="Only accounts found from at least N of your scanned accounts"></div>
         <button id="dbRefresh">↻ Refresh</button>
       </div>
       <div class="row" style="margin-top:10px">
@@ -110,7 +108,6 @@
         <button id="impJson">Import XLSX / JSON</button>
         <input type="file" id="impFile" accept=".xlsx,.json,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
         <button id="dedupe" title="Merge any duplicate rows so each smart account appears once">🧬 Remove duplicates</button>
-        <button id="delSource" class="danger">Remove selected source</button>
         <button id="clearDb" class="danger">Clear database</button>
       </div>
     </div>
@@ -118,7 +115,6 @@
       <h2>🧹 Clean database: remove accounts below a score</h2>
       <div class="row">
         <div><label>Remove accounts with score below</label><input id="purgeMin" type="number" min="0" style="width:140px" placeholder="e.g. 100"></div>
-        <div><label>From source</label><select id="purgeSource"><option value="">All sources</option></select></div>
         <div><label><input id="purgeNoScore" type="checkbox" checked style="width:auto"> also remove rows with no score</label></div>
         <button id="purgePreview">Preview count</button>
         <button id="purgeRun" class="danger">Remove now</button>

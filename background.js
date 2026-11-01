@@ -554,9 +554,9 @@ const handlers = {
     return st.limits;
   },
   apiGet: async ({ endpoint, params }) => apiGet(endpoint, params),
-  purgeBelow: async ({ minScore, source, includeNoScore }) => {
-    const n = await purgeBelow(Number(minScore) || 0, source || '', includeNoScore !== false);
-    log('ok', `🧹 Removed ${n} saved account(s) with score below ${minScore}${source ? ' from @' + source : ''}`);
+  purgeBelow: async ({ minScore, includeNoScore }) => {
+    const n = await purgeBelow(Number(minScore) || 0, includeNoScore !== false);
+    log('ok', `🧹 Removed ${n} saved account(s) with score below ${minScore}`);
     schedulePersist();
     return n;
   },
