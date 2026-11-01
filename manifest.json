@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "SF Scrapper \u2014 TwitterScore Smart Followers",
   "short_name": "SF Scrapper",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Scrape smart followers of any X/Twitter account through the TwitterScore API, filter by score and store them in a local database.",
   "permissions": [
     "storage",

@@ -1,7 +1,7 @@
 import { send, $, fmt, esc, ago, fmtDate, usageHtml, statusLine, jobRow, JOB_HEAD, bindRunToggle } from './common.js';
 import { writeXlsx, readXlsx } from '../lib/xlsx.js';
 import { DEFAULT_SETTINGS, parseUsernames, extractItems } from '../lib/api.js';
-import { getAllFollowers, getAllScans, deleteFollowersBySource, clearAll, putFollowersRaw, putScansRaw, countBelow } from '../lib/db.js';
+import { getAllFollowers, getAllScans, deleteFollowersBySource, clearAll, upsertFollowers, putScansRaw, countBelow, removeDuplicates } from '../lib/db.js';
 
 // ------------------------------------------------------------------ tabs
 const tabs = ['scan', 'db', 'history', 'settings', 'log'];
@@ -168,21 +168,17 @@ let page = 0;
 let sortKey = 'score';
 let sortDir = -1;
 
-const ROW_COLS = [
+const COLS = [
   ['pfp', ''], ['username', 'Username'], ['name', 'Name'], ['score', 'Score', 1], ['followers_count', 'Followers', 1],
-  ['scanned_from', 'Scanned from'], ['scan_time', 'Scan time'], ['first_seen_at', 'First seen'], ['scan_count', 'Scans', 1],
-  ['tags', 'Tags'], ['categories', 'Categories'], ['description', 'Bio'],
+  ['scanned_from', 'Scanned from'], ['source_count', '# Sources', 1], ['scan_time', 'Last scan'], ['first_seen_at', 'First seen'],
+  ['scan_count', 'Scans', 1], ['tags', 'Tags'], ['categories', 'Categories'], ['description', 'Bio'],
 ];
-const UNIQUE_COLS = [
-  ['pfp', ''], ['username', 'Username'], ['name', 'Name'], ['score', 'Score', 1], ['followers_count', 'Followers', 1],
-  ['source_count', '# Sources', 1], ['sources', 'Followed (scanned) accounts'], ['scan_time', 'Last scan'],
-  ['tags', 'Tags'], ['categories', 'Categories'], ['description', 'Bio'],
-];
+const srcList = (r) => (Array.isArray(r.sources) && r.sources.length ? r.sources : String(r.scanned_from || '').split(/\s*,\s*/).filter(Boolean));
 
 async function loadDb() {
   $('#dbStats').textContent = 'Loading…';
   all = await getAllFollowers();
-  const sources = [...new Set(all.map((r) => r.scanned_from))].sort((a, b) => a.localeCompare(b));
+  const sources = [...new Set(all.flatMap(srcList))].sort((a, b) => a.localeCompare(b));
   const cur = $('#fSource').value;
   $('#fSource').innerHTML = '<option value="">All sources</option>' + sources.map((s) => `<option ${s === cur ? 'selected' : ''}>${esc(s)}</option>`).join('');
   const pcur = $('#purgeSource').value;
@@ -190,37 +186,18 @@ async function loadDb() {
   applyFilters();
 }
 
-function mergeUnique(rows) {
-  const m = new Map();
-  for (const r of rows) {
-    const k = (r.username || r.twitter_id).toLowerCase();
-    let u = m.get(k);
-    if (!u) {
-      u = { ...r, id: k, sources: [], source_count: 0 };
-      m.set(k, u);
-    }
-    u.sources.push(r.scanned_from);
-    u.source_count = u.sources.length;
-    if ((r.score ?? -1) > (u.score ?? -1)) u.score = r.score;
-    if (r.scan_time > u.scan_time) { Object.assign(u, { ...r, id: k, sources: u.sources, source_count: u.source_count, score: u.score }); }
-  }
-  for (const u of m.values()) u.sources = u.sources.join(', ');
-  return [...m.values()];
-}
-
 function applyFilters() {
   const q = $('#q').value.trim().toLowerCase();
-  const src = $('#fSource').value;
+  const src = $('#fSource').value.toLowerCase();
   const min = $('#fMin').value === '' ? null : Number($('#fMin').value);
   const max = $('#fMax').value === '' ? null : Number($('#fMax').value);
-  const unique = $('#fView').value === 'unique';
   const minSrc = Math.max(1, Number($('#fMinSrc').value) || 1);
   let rows = all;
-  if (src) rows = rows.filter((r) => r.scanned_from === src);
-  if (unique) rows = mergeUnique(rows).filter((r) => r.source_count >= minSrc);
+  if (src) rows = rows.filter((r) => srcList(r).some((s) => s.toLowerCase() === src));
+  if (minSrc > 1) rows = rows.filter((r) => (r.source_count || srcList(r).length) >= minSrc);
   if (min !== null) rows = rows.filter((r) => (r.score ?? -Infinity) >= min);
   if (max !== null) rows = rows.filter((r) => (r.score ?? Infinity) <= max);
-  if (q) rows = rows.filter((r) => `${r.username} ${r.name} ${r.description} ${r.tags} ${r.categories} ${r.sources || ''}`.toLowerCase().includes(q));
+  if (q) rows = rows.filter((r) => `${r.username} ${r.name} ${r.description} ${r.tags} ${r.categories} ${r.scanned_from}`.toLowerCase().includes(q));
   const dir = sortDir;
   rows = [...rows].sort((a, b) => {
     const x = a[sortKey], y = b[sortKey];
@@ -230,16 +207,14 @@ function applyFilters() {
     return (typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y))) * dir;
   });
   view = rows;
-  const uniqueCount = new Set(all.map((r) => (r.username || '').toLowerCase())).size;
-  const nSources = new Set(all.map((r) => r.scanned_from)).size;
-  $('#dbStats').textContent = `${fmt(all.length)} rows · ${fmt(uniqueCount)} unique accounts · ${fmt(nSources)} scanned sources · showing ${fmt(view.length)}`;
+  const nSources = new Set(all.flatMap(srcList).map((s) => s.toLowerCase())).size;
+  $('#dbStats').textContent = `${fmt(all.length)} unique smart accounts · ${fmt(nSources)} scanned sources · showing ${fmt(view.length)}`;
   page = 0;
   renderDb();
 }
 
 function renderDb() {
-  const unique = $('#fView').value === 'unique';
-  const cols = unique ? UNIQUE_COLS : ROW_COLS;
+  const cols = COLS;
   $('#dbHead').innerHTML = '<tr>' + cols.map(([k, label, n]) =>
     `<th class="${k === 'pfp' ? '' : 'sort'} ${n ? 'num' : ''}" data-k="${k}">${esc(label)}${sortKey === k ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('') + '</tr>';
   document.querySelectorAll('#dbHead th.sort').forEach((th) => (th.onclick = () => {
@@ -256,7 +231,7 @@ function renderDb() {
     if (k === 'pfp') return `<td>${r.profile_image ? `<img class="pfp" loading="lazy" referrerpolicy="no-referrer" src="${esc(r.profile_image)}">` : ''}</td>`;
     if (k === 'username') return `<td><a href="https://x.com/${esc(r.username)}" target="_blank">@${esc(r.username)}</a></td>`;
     if (k === 'score') return `<td class="num score">${fmt(v)}</td>`;
-    if (k === 'scanned_from') return `<td><a href="https://x.com/${esc(v)}" target="_blank">@${esc(v)}</a></td>`;
+    if (k === 'scanned_from') return `<td class="small">${srcList(r).map((s) => `<a href="https://x.com/${esc(s)}" target="_blank">@${esc(s)}</a>`).join(', ')}</td>`;
     if (k === 'scan_time' || k === 'first_seen_at') return `<td class="small" title="${esc(v)}">${esc(fmtDate(v))}</td>`;
     if (k === 'description') return `<td class="desc">${esc(String(v || '').slice(0, 200))}</td>`;
     return `<td class="${n ? 'num' : ''} ${k === 'tags' || k === 'categories' || k === 'sources' ? 'small' : ''}">${n ? fmt(v) : esc(v)}</td>`;
@@ -265,7 +240,17 @@ function renderDb() {
 }
 
 ['#q', '#fMin', '#fMax', '#fMinSrc'].forEach((s) => ($(s).oninput = debounce(applyFilters, 200)));
-['#fSource', '#fView'].forEach((s) => ($(s).onchange = applyFilters));
+$('#fSource').onchange = applyFilters;
+$('#dedupe').onclick = async () => {
+  const btn = $('#dedupe');
+  btn.disabled = true;
+  try {
+    const n = await removeDuplicates();
+    alert(n ? `Removed ${n.toLocaleString()} duplicate row(s). Each smart account now appears once, with all its sources merged.` : 'No duplicates found. Every smart account already appears once.');
+    loadDb();
+  } catch (e) { alert('Failed: ' + e.message); }
+  btn.disabled = false;
+};
 $('#perPage').onchange = renderDb;
 $('#prev').onclick = () => { if (page > 0) { page--; renderDb(); } };
 $('#next').onclick = () => { page++; renderDb(); };
@@ -287,18 +272,16 @@ function csvCell(v) {
   v = String(v);
   return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
-function tableData(rows, unique) {
-  const base = unique
-    ? ['username', 'name', 'score', 'followers_count', 'source_count', 'sources', 'scan_time', 'twitter_id', 'tags', 'categories', 'description', 'profile_image', 'url']
-    : ['username', 'name', 'score', 'scanned_from', 'scan_time', 'first_seen_at', 'scan_count', 'twitter_id', 'followers_count', 'subscribed_at', 'tags', 'categories', 'description', 'profile_image', 'url', 'scan_id', 'min_score_filter', 'page'];
+function tableData(rows) {
+  const base = ['username', 'name', 'score', 'scanned_from', 'source_count', 'scan_time', 'first_seen_at', 'scan_count', 'twitter_id', 'followers_count', 'subscribed_at', 'tags', 'categories', 'description', 'profile_image', 'url', 'scan_id', 'min_score_filter', 'page'];
   const rawKeys = new Set();
   for (const r of rows) if (r.raw) for (const k of Object.keys(r.raw)) rawKeys.add(k);
   const extra = [...rawKeys].sort();
   const header = [...base, ...extra.map((k) => 'api_' + k)];
   return [header, ...rows.map((r) => [...base.map((k) => r[k]), ...extra.map((k) => (r.raw ? r.raw[k] : ''))])];
 }
-function toCsv(rows, unique) {
-  return '\uFEFF' + tableData(rows, unique).map((line) => line.map(csvCell).join(',')).join('\r\n');
+function toCsv(rows) {
+  return '\uFEFF' + tableData(rows).map((line) => line.map(csvCell).join(',')).join('\r\n');
 }
 function downloadBlob(name, blob) {
   const url = URL.createObjectURL(blob);
@@ -310,8 +293,7 @@ $('#expXlsx').onclick = async () => {
   const btn = $('#expXlsx');
   btn.disabled = true; btn.textContent = 'Building…';
   try {
-    const unique = $('#fView').value === 'unique';
-    const blob = await writeXlsx(tableData(view, unique), unique ? 'Unique accounts' : 'Smart followers');
+    const blob = await writeXlsx(tableData(view), 'Smart followers');
     downloadBlob(`smart-followers-${stamp()}.xlsx`, blob);
   } catch (e) { alert('XLSX export failed: ' + e.message); }
   btn.disabled = false; btn.textContent = 'Export XLSX';
@@ -340,24 +322,18 @@ function sheetToRecords(rows) {
     const username = String(o.username || '').replace(/^@/, '').trim();
     if (!username) continue;
     o.username = username;
-    const sources = o.scanned_from ? [String(o.scanned_from)] : o.sources ? String(o.sources).split(/\s*,\s*/).filter(Boolean) : [fallbackSource];
-    for (const src of sources) {
-      const r = { ...o, scanned_from: src.replace(/^@/, ''), scan_time: o.scan_time || now };
-      delete r.sources; delete r.source_count;
-      r.id = `${r.scanned_from.toLowerCase()}::${username.toLowerCase()}`;
-      r.first_seen_at = r.first_seen_at || r.scan_time;
-      r.scan_count = r.scan_count || 1;
-      r.url = r.url || `https://x.com/${username}`;
-      out.push(r);
-    }
+    const sources = String(o.scanned_from || o.sources || fallbackSource).split(/\s*,\s*/).map((x) => x.replace(/^@/, '')).filter(Boolean);
+    const r = { ...o, sources, scanned_from: sources.join(', '), scan_time: o.scan_time || now };
+    delete r.source_count;
+    r.id = username.toLowerCase();
+    r.url = r.url || `https://x.com/${username}`;
+    out.push(r);
   }
   return out;
 }
-$('#expCsv').onclick = () => download(`smart-followers-${stamp()}.csv`, toCsv(view, $('#fView').value === 'unique'), 'text/csv;charset=utf-8');
+$('#expCsv').onclick = () => download(`smart-followers-${stamp()}.csv`, toCsv(view), 'text/csv;charset=utf-8');
 $('#expJson').onclick = async () => {
-  const unique = $('#fView').value === 'unique';
-  const payload = unique ? { type: 'sf-unique', exported_at: new Date().toISOString(), accounts: view }
-    : { type: 'sf-backup', exported_at: new Date().toISOString(), followers: view, scans: await getAllScans() };
+  const payload = { type: 'sf-backup', version: 2, exported_at: new Date().toISOString(), followers: view, scans: await getAllScans() };
   download(`smart-followers-${stamp()}.json`, JSON.stringify(payload, null, 1), 'application/json');
 };
 $('#impJson').onclick = () => $('#impFile').click();
@@ -373,9 +349,9 @@ $('#impFile').onchange = async () => {
       followers = Array.isArray(data) ? data : data.followers || [];
       if (Array.isArray(data.scans)) await putScansRaw(data.scans);
     }
-    followers = followers.filter((r) => r && r.id && r.scanned_from);
-    await putFollowersRaw(followers);
-    alert(`Imported ${followers.length.toLocaleString()} rows (existing rows with the same account + source were updated, not duplicated)`);
+    followers = followers.filter((r) => r && (r.username || r.twitter_id));
+    const { inserted, updated } = await upsertFollowers(followers);
+    alert(`Imported ${followers.length.toLocaleString()} rows → ${inserted.toLocaleString()} new accounts, ${updated.toLocaleString()} merged into existing ones (no duplicates).`);
     loadDb();
   } catch (e) { alert('Import failed: ' + e.message); }
   $('#impFile').value = '';
@@ -383,9 +359,9 @@ $('#impFile').onchange = async () => {
 $('#delSource').onclick = async () => {
   const s = $('#fSource').value;
   if (!s) return alert('Select a source in the "Scanned from" filter first.');
-  if (!confirm(`Delete all followers scanned from @${s}?`)) return;
+  if (!confirm(`Remove source @${s}? Accounts found only from @${s} are deleted; accounts also found from other sources are kept.`)) return;
   const n = await deleteFollowersBySource(s);
-  alert(`Deleted ${n} rows`);
+  alert(`Updated ${n} account(s)`);
   $('#fSource').value = '';
   loadDb();
 };

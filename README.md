@@ -46,30 +46,36 @@ The icon in `icons/` is an original design. To use TwitterScore's own logo, repl
 
 The database is stored in IndexedDB inside the extension (`unlimitedStorage`), so it can hold millions of rows.
 
-**`followers`** has one row per smart follower per scanned account. Its key is `"<scanned_from>::<username>"`.
+**`followers`** has **one row per smart account, with no duplicates.** Its key is the lower-case username.
+If the same person is found from several scanned accounts, or again in a later scan, the existing row is merged and updated. No second row is ever created.
 
 | Field | Meaning |
 |---|---|
-| `scan_time` | When this row was last scraped (ISO). |
-| `score` | Twitter Score. |
+| `scan_time` | When this account was last scraped (ISO). |
+| `score` | Twitter Score, taken from the latest scan. |
 | `username`, `name`, `twitter_id`, `url` | Identity of the follower. |
-| `scanned_from` | The account whose followers were scanned. |
+| `scanned_from` | Every scanned account this person follows, for example `alice, bob`. |
+| `sources`, `source_count` | The same list as an array, and how many accounts are in it. |
 | `followers_count`, `description`, `profile_image` | Profile data. |
 | `tags`, `categories` | TwitterScore tags and categories (names). |
 | `subscribed_at` | When TwitterScore first saw the follow. |
-| `first_seen_at`, `scan_count` | Set the first time this pair was stored, and how many scans have seen it. |
-| `scan_id`, `page`, `min_score_filter` | Which scan produced the row, and the settings it used. |
-| `raw` | **The complete API object, unchanged.** Every field the API returns is kept. |
+| `first_seen_at`, `scan_count` | When the account was first stored, and how many scans have seen it. |
+| `scan_id`, `page`, `min_score_filter` | Which scan last updated the row, and the settings it used. |
+| `raw` | **The complete API object from the latest scan, unchanged.** |
+
+Databases from v1.0/v1.1, which stored one row per source, are merged into this format automatically the first time v1.2 opens them.
+The **🧬 Remove duplicates** button in the Database tab re-checks and merges everything on demand.
 
 **`scans`** has one row per account scan: source, status, min score, filters, start and finish times, pages, requests, found, saved, new, skipped, and the error or stop reason.
 
 In the **Database** tab you can:
 
 - Search, filter by source or score range, sort, and page through results.
-- Switch to the **Unique accounts** view. It merges rows by username, keeps the highest score, and adds `# Sources` (how many of your scanned accounts each one follows). Use **Min # sources** to list accounts that follow several of your targets.
+- Use **Min # sources** to list accounts that follow several of your scanned accounts.
+- **Remove selected source:** accounts found only from that source are deleted. Accounts also found from other sources are kept, and that source is taken off their list.
 - **🧹 Clean database:** remove saved accounts whose score is below a value, from all sources or one source, with a preview count first. The Scan tab has a quick **Remove saved below this score** button that uses the current min score.
-- Export to **XLSX** (Excel) or **CSV** (every API field is added as an `api_*` column) or **JSON** (a full backup), delete one source, or clear everything.
-- **Import XLSX / JSON:** import a spreadsheet or JSON backup. The sheet needs at least a `username` column, and `scanned_from` is recommended. Imported rows reuse the same account + source key, so importing never creates duplicates.
+- Export to **XLSX** (Excel) or **CSV**. Every API field is added as an `api_*` column or **JSON** (a full backup), delete one source, or clear everything.
+- **Import XLSX / JSON:** import a spreadsheet or JSON backup. The sheet needs at least a `username` column, and `scanned_from` is recommended. Imported rows are merged by username, so importing never creates duplicates.
 
 ## Settings reference
 
