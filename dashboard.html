@@ -18,7 +18,7 @@
 </head>
 <body>
   <header>
-    <h1>⚡ SF Scrapper</h1>
+    <h1><img src="icons/icon32.png" alt="" style="width:22px;height:22px;vertical-align:-4px;margin-right:6px">SF Scrapper</h1>
     <nav>
       <button data-tab="scan" class="active">Scan</button>
       <button data-tab="db">Database</button>
@@ -27,6 +27,7 @@
       <button data-tab="log">Log</button>
     </nav>
     <div id="hdrStatus" class="small" style="margin-left:auto"></div>
+    <button id="runToggle" class="runbtn">▶ Run</button>
   </header>
 
   <!-- ================= SCAN ================= -->
@@ -42,6 +43,10 @@
         <div class="grow">
           <label>Min score: only accounts with score ≥ this are saved</label>
           <input id="minScore" type="number" min="0" step="1" value="0" style="width:100%">
+          <div class="row" style="margin-top:6px">
+            <button id="saveDefaults" title="Remember this min score and these filters for every new scan">💾 Save as default</button>
+            <button id="purgeHere" class="danger" title="Delete accounts already in the database whose score is below this value">🧹 Remove saved below this score</button>
+          </div>
           <div class="small muted" style="margin:4px 0 8px">Because the list is sorted by score, the scan stops early once scores fall below this value. Low-score pages never cost requests.</div>
           <label>Category filter (optional)</label>
           <select id="fCategory" style="width:100%"><option value="">— any —</option></select>
@@ -105,11 +110,23 @@
         <span id="dbStats" class="small muted"></span>
         <span style="margin-left:auto"></span>
         <button id="expCsv">Export CSV</button>
+        <button id="expXlsx">Export XLSX</button>
         <button id="expJson">Export JSON</button>
-        <button id="impJson">Import JSON</button>
-        <input type="file" id="impFile" accept=".json,application/json" hidden>
+        <button id="impJson">Import XLSX / JSON</button>
+        <input type="file" id="impFile" accept=".xlsx,.json,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
         <button id="delSource" class="danger">Delete selected source</button>
         <button id="clearDb" class="danger">Clear database</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>🧹 Clean database: remove accounts below a score</h2>
+      <div class="row">
+        <div><label>Remove accounts with score below</label><input id="purgeMin" type="number" min="0" style="width:140px" placeholder="e.g. 100"></div>
+        <div><label>From source</label><select id="purgeSource"><option value="">All sources</option></select></div>
+        <div><label><input id="purgeNoScore" type="checkbox" checked style="width:auto"> also remove rows with no score</label></div>
+        <button id="purgePreview">Preview count</button>
+        <button id="purgeRun" class="danger">Remove now</button>
+        <span id="purgeMsg" class="small muted"></span>
       </div>
     </div>
     <div class="panel">

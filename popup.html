@@ -11,8 +11,8 @@
 </head>
 <body>
   <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:10px">
-    <h1>⚡ SF Scrapper</h1>
-    <button id="openDash">Open dashboard ↗</button>
+    <h1><img src="icons/icon32.png" alt="" style="width:20px;height:20px;vertical-align:-4px;margin-right:6px">SF Scrapper</h1>
+    <button id="runToggle" class="runbtn">▶ Run</button>
   </div>
   <div id="noKey" class="notice" hidden>No API key yet. <a href="#" id="toSettings">Add it in Settings</a>.</div>
 
@@ -21,6 +21,7 @@
     <textarea id="users" rows="4" placeholder="@VitalikButerin&#10;https://x.com/cz_binance"></textarea>
     <div class="row" style="margin-top:8px">
       <div><label>Min score (only save ≥)</label><input id="minScore" type="number" min="0" step="1" value="0" style="width:120px"></div>
+      <button id="saveDefault" title="Remember this min score for every new scan">💾 Save</button>
       <div class="grow"></div>
       <button id="start" class="primary">Start scraping</button>
     </div>
@@ -35,8 +36,7 @@
       <div class="card"><div class="k">New accounts</div><div class="v" id="newAcc">0</div></div>
     </div>
     <div class="row" style="margin-top:10px">
-      <button id="stop" class="danger">Stop</button>
-      <button id="resume">Resume</button>
+      <button id="openDash">Open dashboard ↗</button>
     </div>
   </div>
 

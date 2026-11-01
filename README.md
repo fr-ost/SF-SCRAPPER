@@ -29,8 +29,16 @@ You can also start scans from the toolbar popup. The scan runs in the background
 In a test against a mock server rate-limited at 300/min, the extension held about 292 req/min with
 zero 429s, which is roughly 7,300 followers saved per minute at 25 per page.
 
+## Run button and toolbar icon
+
+The big **Run** button sits at the top of the popup and the dashboard. While a scan is running it turns green, pulses, and reads **Running · Stop**; click it to stop. When scans are paused it reads **Resume**.
+While a scan is running, the toolbar icon gets a green ▶ and a badge showing how many accounts are left. When scans are paused the badge shows **II**.
+
+The icon in `icons/` is an original design. To use TwitterScore's own logo, replace `icons/icon16.png`, `icon32.png`, `icon48.png` and `icon128.png` (plus the `-run` versions) with PNGs of the same size and name, then click reload in `chrome://extensions`.
+
 ## Filters
 
+- **💾 Save as default** (next to Min score in the popup and on the Scan tab) remembers your min score, plus the category and tag filters on the Scan tab, for every new scan.
 - **Min score:** only followers with `twitter_score ≥ min` are saved. Followers below it are neither scraped (thanks to early stop) nor stored.
 - **Category / Tag / Tag-category:** these are the API's server-side filters (`category_id`, `tag_id`, `tag_category_id`). Click **Load categories & tags** to fill the dropdowns. This costs 2 requests, and the results are cached.
 
@@ -59,7 +67,9 @@ In the **Database** tab you can:
 
 - Search, filter by source or score range, sort, and page through results.
 - Switch to the **Unique accounts** view. It merges rows by username, keeps the highest score, and adds `# Sources` (how many of your scanned accounts each one follows). Use **Min # sources** to list accounts that follow several of your targets.
-- Export to **CSV** (every API field is added as an `api_*` column) or **JSON** (a full backup that can be imported again), delete one source, or clear everything.
+- **🧹 Clean database:** remove saved accounts whose score is below a value, from all sources or one source, with a preview count first. The Scan tab has a quick **Remove saved below this score** button that uses the current min score.
+- Export to **XLSX** (Excel) or **CSV** (every API field is added as an `api_*` column) or **JSON** (a full backup), delete one source, or clear everything.
+- **Import XLSX / JSON:** import a spreadsheet or JSON backup. The sheet needs at least a `username` column, and `scanned_from` is recommended. Imported rows reuse the same account + source key, so importing never creates duplicates.
 
 ## Settings reference
 
@@ -72,7 +82,9 @@ If TwitterScore changes the API, you can adapt to it without changing any code. 
 manifest.json      MV3 manifest
 background.js      scraping engine (rate limiter, scheduler, retries, quota, resume)
 lib/api.js         settings, URL building, response parsing, normalisation
-lib/db.js          IndexedDB layer (followers + scans)
+lib/db.js          IndexedDB layer (followers + scans, purge below score)
+lib/xlsx.js        dependency-free XLSX writer/reader
+icons/             toolbar icons (idle + running)
 popup.html         quick-start popup
 dashboard.html     full dashboard: Scan / Database / Scan history / Settings / Log
 ui/*.js, ui/*.css  UI code

@@ -62,3 +62,20 @@ export function jobRow(j) {
 }
 
 export const JOB_HEAD = `<tr><th>Account</th><th>Status</th><th class="num">Min</th><th class="num">Pages</th><th class="num">Req</th><th class="num">Found</th><th class="num">Saved</th><th class="num">New</th><th class="num">Skipped</th><th>Note</th></tr>`;
+
+/** Big run/stop toggle: green pulsing while running (click = stop), "Run" when idle/paused (click = resume). */
+export function bindRunToggle(btn, onChange) {
+  let running = false;
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try { await send(running ? 'stop' : 'resume'); } finally { btn.disabled = false; onChange && onChange(); }
+  };
+  return (st) => {
+    running = st.running;
+    const paused = !st.running && (st.counts?.paused || 0) > 0;
+    btn.classList.toggle('on', st.running);
+    btn.classList.toggle('paused', paused);
+    btn.textContent = st.running ? '● Running · Stop' : paused ? '▶ Resume' : '▶ Run';
+    btn.title = st.running ? 'Click to stop' : paused ? 'Resume paused scans' : 'Start/resume queued scans';
+  };
+}

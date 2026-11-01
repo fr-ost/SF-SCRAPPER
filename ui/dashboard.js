@@ -1,6 +1,7 @@
-import { send, $, fmt, esc, ago, fmtDate, usageHtml, statusLine, jobRow, JOB_HEAD } from './common.js';
+import { send, $, fmt, esc, ago, fmtDate, usageHtml, statusLine, jobRow, JOB_HEAD, bindRunToggle } from './common.js';
+import { writeXlsx, readXlsx } from '../lib/xlsx.js';
 import { DEFAULT_SETTINGS, parseUsernames, extractItems } from '../lib/api.js';
-import { getAllFollowers, getAllScans, deleteFollowersBySource, clearAll, putFollowersRaw, putScansRaw } from '../lib/db.js';
+import { getAllFollowers, getAllScans, deleteFollowersBySource, clearAll, putFollowersRaw, putScansRaw, countBelow } from '../lib/db.js';
 
 // ------------------------------------------------------------------ tabs
 const tabs = ['scan', 'db', 'history', 'settings', 'log'];
@@ -42,6 +43,45 @@ $('#resume').onclick = () => send('resume');
 $('#clearFinished').onclick = () => send('clearFinished');
 $('#clearQueue').onclick = () => confirm('Cancel all queued / paused accounts?') && send('clearQueue');
 $('#resetStats').onclick = (e) => { e.preventDefault(); send('resetStats'); };
+const updateToggle = bindRunToggle($('#runToggle'), () => refresh());
+
+let savedDefaults = { category_id: '', tag_id: '', tag_category_id: '' };
+function applyDefaultFilters() {
+  $('#fCategory').value = savedDefaults.category_id || '';
+  $('#fTag').value = savedDefaults.tag_id || '';
+  $('#fTagCat').value = savedDefaults.tag_category_id || '';
+}
+async function loadDefaults() {
+  const s = await send('getSettings');
+  $('#minScore').value = s.defaultMinScore || 0;
+  savedDefaults = s.defaultFilters || savedDefaults;
+  applyDefaultFilters();
+}
+$('#saveDefaults').onclick = async () => {
+  const defaultFilters = { category_id: $('#fCategory').value, tag_id: $('#fTag').value, tag_category_id: $('#fTagCat').value };
+  try {
+    await send('saveSettings', { settings: { defaultMinScore: Number($('#minScore').value) || 0, defaultFilters } });
+    savedDefaults = defaultFilters;
+    $('#msg').textContent = `💾 Saved: min score ${Number($('#minScore').value) || 0} is now the default`;
+  } catch (e) { $('#msg').textContent = '⚠ ' + e.message; }
+};
+
+async function purge(min, source, includeNoScore, msgEl) {
+  if (!(min > 0)) { msgEl.textContent = '⚠ Enter a score above 0'; return; }
+  const n = await countBelow(min, source, includeNoScore);
+  if (!n) { msgEl.textContent = `Nothing to remove: no saved accounts below ${min}${source ? ' from @' + source : ''}.`; return; }
+  if (!confirm(`Remove ${n.toLocaleString()} saved account row(s) with score below ${min}${source ? ' from @' + source : ' (all sources)'}?\nThis cannot be undone. Export first if you need them.`)) return;
+  const removed = await send('purgeBelow', { minScore: min, source, includeNoScore });
+  msgEl.textContent = `🧹 Removed ${removed.toLocaleString()} row(s) below ${min}`;
+  if (all.length) loadDb();
+}
+$('#purgeHere').onclick = () => purge(Number($('#minScore').value) || 0, '', true, $('#msg'));
+$('#purgePreview').onclick = async () => {
+  const min = Number($('#purgeMin').value) || 0;
+  const n = await countBelow(min, $('#purgeSource').value, $('#purgeNoScore').checked);
+  $('#purgeMsg').textContent = `${n.toLocaleString()} row(s) would be removed`;
+};
+$('#purgeRun').onclick = () => purge(Number($('#purgeMin').value) || 0, $('#purgeSource').value, $('#purgeNoScore').checked, $('#purgeMsg'));
 
 function optionsHtml(list) {
   return '<option value="">— any —</option>' + list.map((o) => `<option value="${esc(o.id)}">${esc(o.name)}${o.extra ? ' · ' + esc(o.extra) : ''} (#${esc(o.id)})</option>`).join('');
@@ -62,6 +102,7 @@ async function applyCats(cache) {
   $('#fCategory').innerHTML = optionsHtml(cats);
   $('#fTag').innerHTML = optionsHtml(tags);
   $('#fTagCat').innerHTML = optionsHtml([...tagCats].map(([id, name]) => ({ id, name })));
+  applyDefaultFilters();
 }
 chrome.storage.local.get('catsCache').then(({ catsCache }) => catsCache && applyCats(catsCache));
 $('#loadCats').onclick = async () => {
@@ -89,6 +130,7 @@ async function refresh() {
   let st;
   try { st = await send('getState'); } catch (e) { $('#status').textContent = e.message; return; }
   $('#noKey').hidden = st.settings.hasKey;
+  updateToggle(st);
   const line = statusLine(st);
   $('#status').innerHTML = line;
   $('#hdrStatus').innerHTML = line;
@@ -143,6 +185,8 @@ async function loadDb() {
   const sources = [...new Set(all.map((r) => r.scanned_from))].sort((a, b) => a.localeCompare(b));
   const cur = $('#fSource').value;
   $('#fSource').innerHTML = '<option value="">All sources</option>' + sources.map((s) => `<option ${s === cur ? 'selected' : ''}>${esc(s)}</option>`).join('');
+  const pcur = $('#purgeSource').value;
+  $('#purgeSource').innerHTML = '<option value="">All sources</option>' + sources.map((s) => `<option ${s === pcur ? 'selected' : ''}>${esc(s)}</option>`).join('');
   applyFilters();
 }
 
@@ -243,7 +287,7 @@ function csvCell(v) {
   v = String(v);
   return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
-function toCsv(rows, unique) {
+function tableData(rows, unique) {
   const base = unique
     ? ['username', 'name', 'score', 'followers_count', 'source_count', 'sources', 'scan_time', 'twitter_id', 'tags', 'categories', 'description', 'profile_image', 'url']
     : ['username', 'name', 'score', 'scanned_from', 'scan_time', 'first_seen_at', 'scan_count', 'twitter_id', 'followers_count', 'subscribed_at', 'tags', 'categories', 'description', 'profile_image', 'url', 'scan_id', 'min_score_filter', 'page'];
@@ -251,9 +295,63 @@ function toCsv(rows, unique) {
   for (const r of rows) if (r.raw) for (const k of Object.keys(r.raw)) rawKeys.add(k);
   const extra = [...rawKeys].sort();
   const header = [...base, ...extra.map((k) => 'api_' + k)];
-  const lines = [header.join(',')];
-  for (const r of rows) lines.push([...base.map((k) => csvCell(r[k])), ...extra.map((k) => csvCell(r.raw ? r.raw[k] : ''))].join(','));
-  return '﻿' + lines.join('\r\n');
+  return [header, ...rows.map((r) => [...base.map((k) => r[k]), ...extra.map((k) => (r.raw ? r.raw[k] : ''))])];
+}
+function toCsv(rows, unique) {
+  return '\uFEFF' + tableData(rows, unique).map((line) => line.map(csvCell).join(',')).join('\r\n');
+}
+function downloadBlob(name, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+$('#expXlsx').onclick = async () => {
+  const btn = $('#expXlsx');
+  btn.disabled = true; btn.textContent = 'Building…';
+  try {
+    const unique = $('#fView').value === 'unique';
+    const blob = await writeXlsx(tableData(view, unique), unique ? 'Unique accounts' : 'Smart followers');
+    downloadBlob(`smart-followers-${stamp()}.xlsx`, blob);
+  } catch (e) { alert('XLSX export failed: ' + e.message); }
+  btn.disabled = false; btn.textContent = 'Export XLSX';
+};
+
+/** Turn spreadsheet rows (header + data, same columns as our export) into DB records. */
+function sheetToRecords(rows) {
+  if (!rows.length) return [];
+  const header = rows[0].map((h) => String(h).trim().toLowerCase().replace(/\s+/g, '_'));
+  const idx = (n) => header.indexOf(n);
+  if (idx('username') < 0) throw new Error('Sheet needs a "username" column');
+  const fallbackSource = idx('scanned_from') < 0 && idx('sources') < 0 ? (prompt('This sheet has no "scanned_from" column. Which account were these followers scanned from?', 'imported') || 'imported') : '';
+  const numCols = new Set(['score', 'followers_count', 'scan_count', 'scan_id', 'min_score_filter', 'page', 'source_count']);
+  const now = new Date().toISOString();
+  const out = [];
+  for (const row of rows.slice(1)) {
+    const o = { raw: {} };
+    header.forEach((h, i) => {
+      let v = row[i];
+      if (v === undefined || v === '') return;
+      if (h.startsWith('api_')) {
+        if (typeof v === 'string' && /^[\[{]/.test(v)) { try { v = JSON.parse(v); } catch { /* keep text */ } }
+        o.raw[h.slice(4)] = v;
+      } else o[h] = numCols.has(h) && Number.isFinite(Number(v)) ? Number(v) : v;
+    });
+    const username = String(o.username || '').replace(/^@/, '').trim();
+    if (!username) continue;
+    o.username = username;
+    const sources = o.scanned_from ? [String(o.scanned_from)] : o.sources ? String(o.sources).split(/\s*,\s*/).filter(Boolean) : [fallbackSource];
+    for (const src of sources) {
+      const r = { ...o, scanned_from: src.replace(/^@/, ''), scan_time: o.scan_time || now };
+      delete r.sources; delete r.source_count;
+      r.id = `${r.scanned_from.toLowerCase()}::${username.toLowerCase()}`;
+      r.first_seen_at = r.first_seen_at || r.scan_time;
+      r.scan_count = r.scan_count || 1;
+      r.url = r.url || `https://x.com/${username}`;
+      out.push(r);
+    }
+  }
+  return out;
 }
 $('#expCsv').onclick = () => download(`smart-followers-${stamp()}.csv`, toCsv(view, $('#fView').value === 'unique'), 'text/csv;charset=utf-8');
 $('#expJson').onclick = async () => {
@@ -267,11 +365,17 @@ $('#impFile').onchange = async () => {
   const f = $('#impFile').files[0];
   if (!f) return;
   try {
-    const data = JSON.parse(await f.text());
-    const followers = Array.isArray(data) ? data : data.followers || [];
-    await putFollowersRaw(followers.filter((r) => r && r.id && r.scanned_from));
-    if (Array.isArray(data.scans)) await putScansRaw(data.scans);
-    alert(`Imported ${followers.length} rows`);
+    let followers;
+    if (/\.xlsx$/i.test(f.name)) {
+      followers = sheetToRecords(await readXlsx(await f.arrayBuffer()));
+    } else {
+      const data = JSON.parse(await f.text());
+      followers = Array.isArray(data) ? data : data.followers || [];
+      if (Array.isArray(data.scans)) await putScansRaw(data.scans);
+    }
+    followers = followers.filter((r) => r && r.id && r.scanned_from);
+    await putFollowersRaw(followers);
+    alert(`Imported ${followers.length.toLocaleString()} rows (existing rows with the same account + source were updated, not duplicated)`);
     loadDb();
   } catch (e) { alert('Import failed: ' + e.message); }
   $('#impFile').value = '';
@@ -306,7 +410,7 @@ async function loadHistory() {
 $('#histRefresh').onclick = loadHistory;
 $('#histCsv').onclick = () => {
   const cols = ['id', 'source', 'status', 'min_score', 'created_at', 'started_at', 'finished_at', 'pages', 'requests', 'found', 'saved', 'new_accounts', 'skipped', 'total_reported', 'error', 'stop_reason', 'filters'];
-  download(`scan-history-${stamp()}.csv`, '﻿' + [cols.join(','), ...histRows.map((r) => cols.map((c) => csvCell(r[c])).join(','))].join('\r\n'), 'text/csv;charset=utf-8');
+  download(`scan-history-${stamp()}.csv`, '\uFEFF' + [cols.join(','), ...histRows.map((r) => cols.map((c) => csvCell(r[c])).join(','))].join('\r\n'), 'text/csv;charset=utf-8');
 };
 
 // ------------------------------------------------------------------ settings tab
@@ -332,8 +436,7 @@ $('#saveSettings').onclick = async () => {
   try {
     await send('saveSettings', { settings: readSettings() });
     $('#setMsg').textContent = 'Saved ✓';
-    const s = await send('getSettings');
-    $('#minScore').value = s.defaultMinScore || 0;
+    await loadDefaults();
     setTimeout(() => ($('#setMsg').textContent = ''), 2000);
   } catch (e) { $('#setMsg').textContent = '⚠ ' + e.message; }
 };
@@ -364,5 +467,5 @@ $('#setUsage').onclick = async () => {
 };
 
 // ------------------------------------------------------------------ init
-send('getSettings').then((s) => { $('#minScore').value = s.defaultMinScore || 0; }).catch(() => {});
+loadDefaults().catch(() => {});
 showTab(location.hash.slice(1) || 'scan');

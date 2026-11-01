@@ -1,4 +1,4 @@
-import { send, $, fmt, esc, usageHtml, statusLine } from './common.js';
+import { send, $, fmt, esc, usageHtml, statusLine, bindRunToggle } from './common.js';
 
 const openDash = (hash = '') => chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html' + hash) });
 $('#openDash').onclick = () => openDash();
@@ -19,13 +19,19 @@ $('#start').onclick = async () => {
     refresh();
   } catch (e) { $('#msg').textContent = '⚠ ' + e.message; }
 };
-$('#stop').onclick = () => send('stop').then(refresh);
-$('#resume').onclick = () => send('resume').then(refresh);
+const updateToggle = bindRunToggle($('#runToggle'), () => refresh());
+$('#saveDefault').onclick = async () => {
+  try {
+    await send('saveSettings', { settings: { defaultMinScore: Number($('#minScore').value) || 0 } });
+    $('#msg').textContent = `💾 Saved: min score ${Number($('#minScore').value) || 0} is now the default`;
+  } catch (e) { $('#msg').textContent = '⚠ ' + e.message; }
+};
 
 async function refresh() {
   try {
     const st = await send('getState');
     $('#noKey').hidden = st.settings.hasKey;
+    updateToggle(st);
     $('#status').innerHTML = statusLine(st);
     $('#usage').innerHTML = usageHtml(st);
     $('#saved').textContent = fmt(st.stats.saved);

@@ -50,3 +50,9 @@ tr:hover td { background: #1a2130; }
 .pfp { width: 24px; height: 24px; border-radius: 50%; vertical-align: middle; background: var(--chip); }
 .score { font-weight: 700; color: #ffd166; }
 pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; overflow: auto; max-height: 50vh; font-size: 11px; }
+
+.runbtn { font-weight: 700; min-width: 120px; }
+.runbtn.on { background: #1f6f35; border-color: #2ea043; color: #fff; animation: pulse 1.4s ease-in-out infinite; }
+.runbtn.on:hover { background: #8b2a26; border-color: var(--err); animation: none; }
+.runbtn.paused { background: #4a3a10; border-color: var(--warn); color: #f0c860; }
+@keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(46,160,67,.6); } 50% { box-shadow: 0 0 0 7px rgba(46,160,67,0); } }

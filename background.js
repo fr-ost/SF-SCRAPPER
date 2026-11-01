@@ -15,7 +15,7 @@ import {
   mergeSettings, parseUsernames, buildFollowersRequest, buildRequest, redactUrl,
   extractItems, extractMeta, extractApiError, normalizeFollower, scoreOf,
 } from './lib/api.js';
-import { upsertFollowers, addScan, putScan } from './lib/db.js';
+import { upsertFollowers, addScan, putScan, purgeBelow } from './lib/db.js';
 
 const STOP = new Error('__STOP__');
 const CLAMP_SIZES = new Set([10, 15, 20, 25, 30, 40, 50, 100]);
@@ -92,6 +92,24 @@ const limiter = {
     return p;
   },
 };
+
+// ---------------------------------------------------------------- toolbar icon / badge
+const ICONS = (suf) => ({ 16: `icons/icon16${suf}.png`, 32: `icons/icon32${suf}.png`, 48: `icons/icon48${suf}.png`, 128: `icons/icon128${suf}.png` });
+let badgeState = '';
+function updateBadge() {
+  const active = st.jobs.filter((j) => j.status === 'running' || j.status === 'queued').length;
+  const paused = st.jobs.some((j) => j.status === 'paused');
+  const key = st.running ? `run:${active}` : paused ? 'paused' : 'idle';
+  if (key === badgeState) return;
+  badgeState = key;
+  try {
+    chrome.action.setIcon({ path: ICONS(st.running ? '-run' : '') });
+    chrome.action.setBadgeBackgroundColor({ color: st.running ? '#2ea043' : '#d29922' });
+    chrome.action.setBadgeText({ text: st.running ? String(active || '') || 'ON' : paused ? 'II' : '' });
+    chrome.action.setTitle({ title: st.running ? `SF Scrapper: running (${active} account(s) left)` : paused ? 'SF Scrapper: paused' : 'SF Scrapper' });
+  } catch { /* ignore */ }
+}
+setInterval(updateBadge, 1500);
 
 // ---------------------------------------------------------------- keep-alive
 let keepAliveTimer = null;
@@ -182,6 +200,7 @@ async function runEngine() {
   st.stats.finishedAt = null;
   startKeepAlive();
   schedulePersist();
+  updateBadge();
   log('info', `Engine started — ${S.rpm} req/min, ${S.maxConcurrent} concurrent, ${S.parallelAccounts} accounts × ${S.pageWindow} pages`);
   try {
     const n = Math.max(1, Number(S.maxConcurrent) || 1);
@@ -200,6 +219,7 @@ async function runEngine() {
     }
     st.stats.finishedAt = nowIso();
     stopKeepAlive();
+    updateBadge();
     log(wasStopped && st.stopReason ? 'warn' : 'ok', wasStopped && st.stopReason ? `■ Engine stopped: ${st.stopReason}` : '■ All scans finished');
     await persistNow();
   }
@@ -461,6 +481,8 @@ const handlers = {
       S[k] = Math.max(k === 'firstPage' || k === 'maxPagesPerAccount' || k === 'defaultMinScore' ? 0 : 1, Number(S[k]) || 0);
     }
     S.earlyStop = !!S.earlyStop;
+    const df = S.defaultFilters || {};
+    S.defaultFilters = { category_id: String(df.category_id ?? ''), tag_id: String(df.tag_id ?? ''), tag_category_id: String(df.tag_category_id ?? '') };
     await chrome.storage.local.set({ settings: S });
     return S;
   },
@@ -512,6 +534,12 @@ const handlers = {
     return st.limits;
   },
   apiGet: async ({ endpoint, params }) => apiGet(endpoint, params),
+  purgeBelow: async ({ minScore, source, includeNoScore }) => {
+    const n = await purgeBelow(Number(minScore) || 0, source || '', includeNoScore !== false);
+    log('ok', `🧹 Removed ${n} saved account(s) with score below ${minScore}${source ? ' from @' + source : ''}`);
+    schedulePersist();
+    return n;
+  },
 };
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -551,7 +579,7 @@ async function init() {
     }
   }
 }
-const ready = init().catch((e) => console.error('init failed', e));
+const ready = init().catch((e) => console.error('init failed', e)).finally(updateBadge);
 
 chrome.alarms.create('sf-heartbeat', { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener(async (a) => {
