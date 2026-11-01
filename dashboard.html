@@ -1,0 +1,188 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SF Scrapper — Dashboard</title>
+  <link rel="stylesheet" href="ui/common.css">
+  <style>
+    body { padding: 0 20px 40px; }
+    header { display: flex; align-items: center; gap: 18px; padding: 14px 0; border-bottom: 1px solid var(--border); margin-bottom: 14px; position: sticky; top: 0; background: var(--bg); z-index: 5; flex-wrap: wrap; }
+    nav button { background: transparent; border-color: transparent; }
+    nav button.active { background: var(--chip); border-color: var(--border); }
+    .tab { display: none; } .tab.active { display: block; }
+    .grid2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+    .grid2 input, .grid2 select { width: 100%; }
+    .desc { max-width: 380px; font-size: 12px; color: var(--muted); }
+    #dbTable td { font-size: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>⚡ SF Scrapper</h1>
+    <nav>
+      <button data-tab="scan" class="active">Scan</button>
+      <button data-tab="db">Database</button>
+      <button data-tab="history">Scan history</button>
+      <button data-tab="settings">Settings</button>
+      <button data-tab="log">Log</button>
+    </nav>
+    <div id="hdrStatus" class="small" style="margin-left:auto"></div>
+  </header>
+
+  <!-- ================= SCAN ================= -->
+  <section class="tab active" id="tab-scan">
+    <div id="noKey" class="notice" hidden>No API key set — go to <a href="#settings" data-goto="settings">Settings</a> first.</div>
+    <div class="panel">
+      <div class="row" style="align-items:stretch">
+        <div class="grow" style="flex:2">
+          <label>X usernames to scan: one per line, comma separated, @handles, x.com links or numeric twitter IDs (bulk OK)</label>
+          <textarea id="users" rows="7" placeholder="@VitalikButerin&#10;cz_binance&#10;https://x.com/aeyakovenko"></textarea>
+          <div class="small muted" id="userCount"></div>
+        </div>
+        <div class="grow">
+          <label>Min score: only accounts with score ≥ this are saved</label>
+          <input id="minScore" type="number" min="0" step="1" value="0" style="width:100%">
+          <div class="small muted" style="margin:4px 0 8px">Because the list is sorted by score, the scan stops early once scores fall below this value. Low-score pages never cost requests.</div>
+          <label>Category filter (optional)</label>
+          <select id="fCategory" style="width:100%"><option value="">— any —</option></select>
+          <label style="margin-top:6px">Tag filter (optional)</label>
+          <select id="fTag" style="width:100%"><option value="">— any —</option></select>
+          <label style="margin-top:6px">Tag-category filter (optional)</label>
+          <select id="fTagCat" style="width:100%"><option value="">— any —</option></select>
+          <div class="row" style="margin-top:6px"><button id="loadCats" class="small">Load categories &amp; tags (2 req)</button></div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="start" class="primary">▶ Start scraping</button>
+        <button id="stop" class="danger">■ Stop</button>
+        <button id="resume">⏵ Resume</button>
+        <button id="clearFinished">Clear finished</button>
+        <button id="clearQueue">Cancel queue</button>
+        <span id="msg" class="small muted"></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div id="status" style="margin-bottom:10px"></div>
+      <div class="cards">
+        <div class="card" id="usage" style="grid-column: span 2"></div>
+        <div class="card"><div class="k">Live req/min</div><div class="v" id="cRpm">0</div><div class="bar"><i id="rpmBar" style="width:0"></i></div></div>
+        <div class="card"><div class="k">In flight</div><div class="v" id="cInflight">0</div></div>
+        <div class="card"><div class="k">Saved (session)</div><div class="v" id="cSaved">0</div></div>
+        <div class="card"><div class="k">New accounts</div><div class="v" id="cNew">0</div></div>
+        <div class="card"><div class="k">Below filter (skipped)</div><div class="v" id="cSkipped">0</div></div>
+        <div class="card"><div class="k">Requests (session)</div><div class="v" id="cReq">0</div></div>
+        <div class="card"><div class="k">Retries / 429s / errors</div><div class="v" id="cErr">0</div></div>
+        <div class="card"><div class="k">Accounts: run / queue / done</div><div class="v" id="cJobs">0</div></div>
+      </div>
+      <div class="row small muted" style="margin-top:8px"><span id="serverRate"></span><span style="margin-left:auto"><a href="#" id="resetStats">reset session stats</a></span></div>
+    </div>
+
+    <div class="panel">
+      <h2>Accounts</h2>
+      <div class="table-wrap"><table><thead id="jobsHead"></thead><tbody id="jobs"></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- ================= DATABASE ================= -->
+  <section class="tab" id="tab-db">
+    <div class="panel">
+      <div class="row">
+        <div class="grow"><label>Search (username, name, bio, tags)</label><input id="q" style="width:100%" placeholder="search…"></div>
+        <div><label>Scanned from</label><select id="fSource"><option value="">All sources</option></select></div>
+        <div><label>Min score</label><input id="fMin" type="number" style="width:90px"></div>
+        <div><label>Max score</label><input id="fMax" type="number" style="width:90px"></div>
+        <div><label>View</label>
+          <select id="fView">
+            <option value="rows">All rows (per source)</option>
+            <option value="unique">Unique accounts (merged)</option>
+          </select>
+        </div>
+        <div><label>Min # sources</label><input id="fMinSrc" type="number" min="1" value="1" style="width:80px" title="Unique view: accounts following at least N of your scanned accounts"></div>
+        <button id="dbRefresh">↻ Refresh</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <span id="dbStats" class="small muted"></span>
+        <span style="margin-left:auto"></span>
+        <button id="expCsv">Export CSV</button>
+        <button id="expJson">Export JSON</button>
+        <button id="impJson">Import JSON</button>
+        <input type="file" id="impFile" accept=".json,application/json" hidden>
+        <button id="delSource" class="danger">Delete selected source</button>
+        <button id="clearDb" class="danger">Clear database</button>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="table-wrap"><table id="dbTable"><thead id="dbHead"></thead><tbody id="dbBody"></tbody></table></div>
+      <div class="row" style="margin-top:8px;align-items:center">
+        <button id="prev">‹ Prev</button><span id="pageInfo" class="small muted"></span><button id="next">Next ›</button>
+        <span style="margin-left:auto" class="small muted">Rows per page</span>
+        <select id="perPage"><option>50</option><option selected>100</option><option>250</option><option>500</option></select>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= HISTORY ================= -->
+  <section class="tab" id="tab-history">
+    <div class="panel">
+      <div class="row" style="margin-bottom:8px"><h2>Scan history</h2><span style="margin-left:auto"></span><button id="histRefresh">↻ Refresh</button><button id="histCsv">Export CSV</button></div>
+      <div class="table-wrap"><table><thead><tr><th>#</th><th>Source</th><th>Status</th><th class="num">Min score</th><th>Started</th><th>Finished</th><th class="num">Pages</th><th class="num">Req</th><th class="num">Found</th><th class="num">Saved</th><th class="num">New</th><th class="num">Skipped</th><th>Note</th></tr></thead><tbody id="hist"></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- ================= SETTINGS ================= -->
+  <section class="tab" id="tab-settings">
+    <div class="panel">
+      <h2>API</h2>
+      <div class="grid2">
+        <div style="grid-column: span 2"><label>TwitterScore API key</label><input id="s_apiKey" type="password" autocomplete="off" placeholder="paste your API key"></div>
+        <div><label>Auth method</label><select id="s_authMode"><option value="query">?api_key= query (docs)</option><option value="header">X-API-Key header</option><option value="both">both</option></select></div>
+        <div><label>Base URL</label><input id="s_baseUrl"></div>
+        <div><label>Followers endpoint</label><input id="s_endpoint"></div>
+        <div><label>Username param</label><input id="s_userParam"></div>
+        <div><label>Page param</label><input id="s_pageParam"></div>
+        <div><label>Size param</label><input id="s_sizeParam"></div>
+        <div><label>Page size (followers per request)</label><input id="s_pageSize" type="number" min="1"></div>
+        <div><label>First page index</label><input id="s_firstPage" type="number" min="0"></div>
+        <div style="grid-column: span 2"><label>Extra query params (e.g. <code>sort=desc&amp;foo=1</code>)</label><input id="s_extraParams"></div>
+      </div>
+      <h2 style="margin-top:16px">Speed &amp; quota</h2>
+      <div class="grid2">
+        <div><label>Requests per minute (plan: 300)</label><input id="s_rpm" type="number" min="1"></div>
+        <div><label>Monthly request limit (plan: 250,000)</label><input id="s_monthlyLimit" type="number" min="1"></div>
+        <div><label>Max concurrent requests</label><input id="s_maxConcurrent" type="number" min="1"></div>
+        <div><label>Accounts scanned in parallel</label><input id="s_parallelAccounts" type="number" min="1"></div>
+        <div><label>Pages per account in parallel</label><input id="s_pageWindow" type="number" min="1"></div>
+        <div><label>Max pages per account (0 = all)</label><input id="s_maxPagesPerAccount" type="number" min="0"></div>
+        <div><label>Request timeout (ms)</label><input id="s_requestTimeoutMs" type="number" min="1000"></div>
+        <div><label>Default min score</label><input id="s_defaultMinScore" type="number" min="0"></div>
+        <div><label><input id="s_earlyStop" type="checkbox" style="width:auto"> Stop an account once scores drop below min (saves requests)</label></div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button id="saveSettings" class="primary">Save settings</button>
+        <button id="resetSettings">Reset to defaults</button>
+        <span id="setMsg" class="small muted"></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Tools</h2>
+      <div class="row">
+        <div><label>Test username (uses 1 request)</label><input id="testUser" placeholder="VitalikButerin"></div>
+        <button id="testApi">Test API</button>
+        <button id="checkLimits">Check plan limits (/limits)</button>
+        <div><label>Correct local monthly counter</label><input id="usageFix" type="number" min="0" style="width:120px"></div>
+        <button id="setUsage">Set</button>
+      </div>
+      <pre id="toolOut" class="small" style="margin-top:10px">Run "Test API" to see exactly what the API returns and how it is parsed.</pre>
+    </div>
+  </section>
+
+  <!-- ================= LOG ================= -->
+  <section class="tab" id="tab-log">
+    <div class="panel"><div class="log" id="log"></div></div>
+  </section>
+
+  <script type="module" src="ui/dashboard.js"></script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "SF Scrapper — TwitterScore Smart Followers",
+  "short_name": "SF Scrapper",
+  "version": "1.0.0",
+  "description": "Scrape smart followers of any X/Twitter account through the TwitterScore API, filter by score and store them in a local database.",
+  "permissions": ["storage", "unlimitedStorage", "alarms"],
+  "host_permissions": ["https://twitterscore.io/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "SF Scrapper",
+    "default_popup": "popup.html"
+  },
+  "options_page": "dashboard.html"
+}

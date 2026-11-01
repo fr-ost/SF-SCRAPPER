@@ -1,0 +1,52 @@
+:root {
+  --bg: #0d1117; --panel: #161b22; --panel2: #1c2330; --border: #2a3342; --text: #e6edf3; --muted: #8b98a9;
+  --accent: #4f8cff; --accent2: #2f6fe8; --ok: #2ea043; --warn: #d29922; --err: #f85149; --chip: #222b38;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+a { color: var(--accent); }
+h1, h2, h3 { margin: 0 0 8px; font-weight: 600; }
+h1 { font-size: 17px; } h2 { font-size: 15px; } h3 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+input, select, textarea, button { font: inherit; color: var(--text); }
+input, select, textarea { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; outline: none; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+textarea { width: 100%; resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospace; }
+label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 3px; }
+button { background: var(--chip); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; cursor: pointer; white-space: nowrap; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent2); border-color: var(--accent2); color: #fff; font-weight: 600; }
+button.primary:hover { background: var(--accent); }
+button.danger { color: var(--err); }
+button:disabled { opacity: .5; cursor: default; }
+.row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.row > .grow { flex: 1; min-width: 120px; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+.muted { color: var(--muted); }
+.small { font-size: 11px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.card { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.card .v { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.card .k { color: var(--muted); font-size: 11px; }
+.bar { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; margin-top: 4px; }
+.bar > i { display: block; height: 100%; background: var(--accent); }
+.badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; background: var(--chip); }
+.badge.running { background: #1f3b6e; color: #9cc0ff; }
+.badge.queued { background: #2b2f38; color: #aab4c3; }
+.badge.paused { background: #4a3a10; color: #f0c860; }
+.badge.done { background: #133d22; color: #6fdd8b; }
+.badge.error { background: #4d1a1a; color: #ff9b95; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; position: sticky; top: 0; background: var(--panel); cursor: default; }
+th.sort { cursor: pointer; user-select: none; }
+th.sort:hover { color: var(--text); }
+tr:hover td { background: #1a2130; }
+.num { text-align: right; }
+.table-wrap { overflow: auto; max-height: 70vh; border: 1px solid var(--border); border-radius: 8px; }
+.log { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; max-height: 60vh; overflow: auto; white-space: pre-wrap; }
+.log .error { color: var(--err); } .log .warn { color: var(--warn); } .log .ok { color: #6fdd8b; }
+.notice { padding: 8px 10px; border-radius: 6px; background: #3a2a0a; border: 1px solid #6b4f12; color: #f0c860; margin-bottom: 10px; }
+.notice.err { background: #3a1212; border-color: #6b2020; color: #ff9b95; }
+.pfp { width: 24px; height: 24px; border-radius: 50%; vertical-align: middle; background: var(--chip); }
+.score { font-weight: 700; color: #ffd166; }
+pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; overflow: auto; max-height: 50vh; font-size: 11px; }
