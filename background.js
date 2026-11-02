@@ -37,6 +37,8 @@ const st = {
 };
 let engineActive = false;
 let jobSeq = 0;
+let authFailStreak = 0;
+let workerGen = 0;
 
 // ---------------------------------------------------------------- logging / persistence
 function log(level, msg) {
@@ -112,12 +114,47 @@ function updateBadge() {
 setInterval(updateBadge, 1500);
 
 // ---------------------------------------------------------------- keep-alive
+// Three layers so a scan can run for hours or days:
+//  1. an offscreen document pings this worker every 20 s, and each message counts as an event (main fix);
+//  2. an extension API call every 20 s also resets the idle timer;
+//  3. if Chrome restarts the worker anyway, the saved state plus the 30 s alarm or the next ping resume the engine.
 let keepAliveTimer = null;
-function startKeepAlive() {
-  if (keepAliveTimer) return;
-  keepAliveTimer = setInterval(() => chrome.runtime.getPlatformInfo(() => {}), 20000);
+let offscreenCreating = null;
+async function ensureOffscreen() {
+  if (!chrome.offscreen) return;
+  try {
+    if (chrome.runtime.getContexts) {
+      const ctx = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
+      if (ctx.length) return;
+    }
+    if (!offscreenCreating) {
+      offscreenCreating = chrome.offscreen.createDocument({
+        url: 'offscreen.html',
+        reasons: ['WORKERS'],
+        justification: 'Keep the smart-follower scraping engine running while a scan is in progress',
+      }).catch((e) => { if (!/single offscreen|already/i.test(String(e && e.message))) console.warn('[SF] offscreen', e); })
+        .finally(() => { offscreenCreating = null; });
+    }
+    await offscreenCreating;
+  } catch (e) { console.warn('[SF] offscreen', e); }
 }
-function stopKeepAlive() { clearInterval(keepAliveTimer); keepAliveTimer = null; }
+async function closeOffscreen() {
+  try { if (chrome.offscreen) await chrome.offscreen.closeDocument(); } catch { /* none open */ }
+}
+function startKeepAlive() {
+  ensureOffscreen();
+  if (keepAliveTimer) return;
+  keepAliveTimer = setInterval(() => {
+    chrome.runtime.getPlatformInfo(() => {});
+    ensureOffscreen();
+  }, 20000);
+}
+function stopKeepAlive() { clearInterval(keepAliveTimer); keepAliveTimer = null; closeOffscreen(); }
+
+// Watchdog: if requests stop completing while the engine says it is running (a hung connection or
+// database call), restart the worker loops. In-flight pages are queued again, so nothing is lost.
+let lastProgress = Date.now();
+function noteProgress() { lastProgress = Date.now(); }
 
 // ---------------------------------------------------------------- job scheduling
 function lastAllowedPage(j) {
@@ -203,8 +240,22 @@ async function runEngine() {
   updateBadge();
   log('info', `Engine started — ${S.rpm} req/min, ${S.maxConcurrent} concurrent, ${S.parallelAccounts} accounts × ${S.pageWindow} pages`);
   try {
-    const n = Math.max(1, Number(S.maxConcurrent) || 1);
-    await Promise.all(Array.from({ length: n }, () => worker()));
+    noteProgress();
+    for (;;) {
+      const gen = ++workerGen;
+      const n = Math.max(1, Number(S.maxConcurrent) || 1);
+      const workers = Promise.all(Array.from({ length: n }, () => worker(gen)));
+      const hung = await Promise.race([workers.then(() => false), watchdog(gen)]);
+      if (!hung) break;
+      // Watchdog fired: requeue whatever was in flight and start fresh loops.
+      log('warn', '⟳ Watchdog: no progress for 3 min, restarting workers');
+      for (const j of st.jobs) {
+        if (j.status === 'running') { j.retryPages.push(...j.inflightPages); j.inflightPages = []; j.inflight = 0; }
+      }
+      limiter.chain = Promise.resolve();
+      noteProgress();
+    }
+    workerGen++;
   } finally {
     engineActive = false;
     const wasStopped = !st.running;
@@ -232,8 +283,17 @@ function stopAll(reason) {
   log('warn', `Stopping: ${reason}`);
 }
 
-async function worker() {
-  while (st.running) {
+async function watchdog(gen) {
+  for (;;) {
+    await sleep(15000);
+    if (gen !== workerGen || !st.running) return false;
+    const pausing = st.pauseUntil > Date.now();
+    if (!pausing && Date.now() - lastProgress > 180000 && st.jobs.some((j) => j.status === 'running' && j.inflight > 0)) return true;
+  }
+}
+
+async function worker(gen) {
+  while (st.running && gen === workerGen) {
     const job = pickJob();
     if (!job) {
       if (!pendingWork()) return;
@@ -246,6 +306,7 @@ async function worker() {
     try {
       await fetchPage(job, page);
     } catch (e) {
+      if (gen !== workerGen) return; // replaced by the watchdog; page already requeued
       if (e === STOP) {
         job.retryPages.push(page);
       } else {
@@ -254,13 +315,13 @@ async function worker() {
         log('error', `@${job.source} page ${page} failed: ${e.message}`);
         if (job.pagesDone === 0 && job.failedPages.length >= 2) { job.error = e.message; setStop(job, 0, 'error'); }
       }
-    } finally {
-      job.inflight--;
-      const i = job.inflightPages.indexOf(page);
-      if (i >= 0) job.inflightPages.splice(i, 1);
-      if (st.running) finishJobIfDone(job);
-      schedulePersist();
     }
+    if (gen !== workerGen) return; // replaced by the watchdog; counters were already reset
+    job.inflight--;
+    const i = job.inflightPages.indexOf(page);
+    if (i >= 0) job.inflightPages.splice(i, 1);
+    if (st.running) finishJobIfDone(job);
+    schedulePersist();
   }
 }
 
@@ -314,6 +375,7 @@ async function fetchPage(job, page) {
       throw new Error(`network: ${e.message}`);
     }
     readRateHeaders(res);
+    noteProgress();
     let json = null;
     try { json = JSON.parse(text); } catch { /* not json */ }
     const apiErr = json ? extractApiError(json) : null;
@@ -326,12 +388,21 @@ async function fetchPage(job, page) {
       if (++attempt <= 15) continue;
       throw new Error('rate limited repeatedly');
     }
-    if (res.status === 401 || res.status === 403 || (apiErr && /api.?key|unauthori[sz]ed|forbidden|invalid key|not authenticated/i.test(apiErr))) {
+    if (res.status === 401 || res.status === 403 || (apiErr && /api.?key|unauthori[sz]ed|invalid key|not authenticated/i.test(apiErr))) {
       const msg = apiErr || short(text);
-      if (/quota|exceed|month|limit/i.test(msg)) stopAll(`Quota exhausted: ${msg}`);
-      else stopAll(`API key rejected (HTTP ${res.status}): ${msg}`);
-      throw STOP;
+      if (/quota|exceed|month|no requests left|limit reached/i.test(msg)) { stopAll(`Quota exhausted: ${msg}`); throw STOP; }
+      authFailStreak++;
+      // One 401/403 may concern just this account. Stop everything only if the key itself is clearly bad.
+      if (/invalid.{0,10}(api.?)?key|api.?key.{0,20}(invalid|wrong|missing|expired)|not authenticated/i.test(msg) || authFailStreak >= 6) {
+        stopAll(`API key rejected (HTTP ${res.status}): ${msg}`);
+        throw STOP;
+      }
+      log('warn', `@${job.source}: HTTP ${res.status} (${msg}), skipping this account`);
+      if (job.pagesDone === 0) job.error = `HTTP ${res.status}: ${msg}`;
+      setStop(job, page - 1, `HTTP ${res.status}`);
+      return;
     }
+    authFailStreak = 0;
     if (apiErr && /quota|exceeded|monthly|no requests left|limit reached/i.test(apiErr)) {
       stopAll(`Quota exhausted: ${apiErr}`);
       throw STOP;
@@ -492,6 +563,14 @@ async function apiGet(endpoint, params) {
 }
 
 const handlers = {
+  keepAlive: async () => {
+    if (!engineActive) {
+      const { engine } = await chrome.storage.local.get('engine');
+      if (engine && engine.running && st.jobs.some((j) => ['queued', 'running'].includes(j.status))) runEngine();
+      else closeOffscreen();
+    }
+    return true;
+  },
   getState: async () => publicState(),
   getSettings: async () => S,
   saveSettings: async ({ settings }) => {

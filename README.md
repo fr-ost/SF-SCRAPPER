@@ -24,7 +24,10 @@ You can also start scans from the toolbar popup. The scan runs in the background
 | Page 1 is fetched first for each account | Unknown or invalid usernames cost 1 request, not a whole batch of pages. |
 | On a 429, every request pauses for `Retry-After` and the same page is retried | No data is lost. |
 | Monthly counter, with the stop point set by the "Monthly request limit" setting | Scanning stops automatically when the quota is used up. **Check plan limits** calls `/limits` so you can sync the counter with the server. |
-| State is saved to storage, and a heartbeat alarm restarts work | If Chrome kills the service worker mid-scan, the scan resumes where it stopped. **Stop** and **Resume** also work. |
+| A hidden offscreen page pings the background worker every 20 s, plus API keep-alive calls | Chrome doesn't stop the worker while a scan runs, so scans can go for hours. |
+| State is saved continuously; restarts come from the ping or a 30-second alarm | If Chrome kills the worker anyway, the scan resumes within seconds from where it stopped. |
+| Watchdog | If requests stop completing for 3 minutes (a hung connection), the worker loops restart and the pages in flight are fetched again. |
+| An HTTP 401/403 for one account skips only that account | Only a clearly invalid key, or 6 auth failures in a row, stops the engine. The stop reason appears in the status line and the Log tab. |
 
 In a test against a mock server rate-limited at 300/min, the extension held about 292 req/min with
 zero 429s, which is roughly 7,300 followers saved per minute at 25 per page.
